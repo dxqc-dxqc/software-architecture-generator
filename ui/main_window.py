@@ -7,7 +7,10 @@ from PyQt6.QtGui import QFont
 from PyQt6.QtCore import Qt
 
 from ui.custom_widgets import RobustTreeWidget
-from src.core_logic import generate_markdown_text, parse_markdown_to_tree_data, ensure_history_dir
+from src.core_logic import (
+    generate_markdown_text, parse_markdown_to_tree_data,
+    ensure_history_dir, scan_local_directory_to_tree_data
+)
 
 BMW_COLORS = {
     "primary": "#1c69d4",  # 宝马蓝
@@ -47,7 +50,7 @@ class ArchitectureBuilder(QMainWindow):
         self.setWindowTitle("BMW Corporate - 架构规格设计与历史回溯系统")
         self.resize(1200, 800)
         self.setStyleSheet(BMW_STYLE_SHEET)
-        ensure_history_dir()  # 初始化时确保历史文件夹存在
+        ensure_history_dir()
         self.init_ui()
 
     def init_ui(self):
@@ -57,7 +60,7 @@ class ArchitectureBuilder(QMainWindow):
         outer_layout.setContentsMargins(0, 0, 0, 0)
         outer_layout.setSpacing(0)
 
-        # 1. 顶端导航模拟
+        # 1. 顶端导航栏
         header_band = QFrame()
         header_band.setObjectName("HeaderBand")
         header_band.setFixedHeight(64)
@@ -84,21 +87,33 @@ class ArchitectureBuilder(QMainWindow):
         left_layout.setContentsMargins(24, 24, 24, 24)
         left_layout.setSpacing(12)
 
-        panel_title = QLabel("节点属性与控制")
+        panel_title = QLabel("项目控制与属性")
         panel_title.setFont(QFont("Microsoft YaHei", 11, QFont.Weight.Bold))
         left_layout.addWidget(panel_title)
 
-        # 核心功能新增：历史架构双向逆向读取入口
-        self.btn_load_history = QPushButton("📂 读取历史架构 (.md)")
+        # 🚀【功能升级：双重读取入口排版布局】
+        btn_box = QHBoxLayout()
+        btn_box.setSpacing(8)
+
+        self.btn_load_dir = QPushButton("📁 载入本地文件夹")
+        self.btn_load_dir.setObjectName("SecondaryButton")
+        self.btn_load_dir.setStyleSheet(
+            f"color: {BMW_COLORS['primary']}; border-color: {BMW_COLORS['primary']}; background-color: #ffffff; padding: 10px 12px; font-size: 13px;")
+        self.btn_load_dir.clicked.connect(self.load_from_local_directory)
+        btn_box.addWidget(self.btn_load_dir)
+
+        self.btn_load_history = QPushButton("📄 读取历史 MD")
         self.btn_load_history.setObjectName("SecondaryButton")
         self.btn_load_history.setStyleSheet(
-            f"color: {BMW_COLORS['primary']}; border-color: {BMW_COLORS['primary']}; background-color: #ffffff;")
+            f"color: {BMW_COLORS['primary']}; border-color: {BMW_COLORS['primary']}; background-color: #ffffff; padding: 10px 12px; font-size: 13px;")
         self.btn_load_history.clicked.connect(self.load_from_history_md)
-        left_layout.addWidget(self.btn_load_history)
+        btn_box.addWidget(self.btn_load_history)
+
+        left_layout.addLayout(btn_box)
 
         left_layout.addWidget(QLabel("节点名称："))
         self.name_input = QLineEdit()
-        self.name_input.setPlaceholderText("例如: src, main.py, utils")
+        self.name_input.setPlaceholderText("例如: src, main.py")
         self.name_input.setFont(QFont("Microsoft YaHei", 10, QFont.Weight.Light))
         left_layout.addWidget(self.name_input)
 
@@ -163,7 +178,88 @@ class ArchitectureBuilder(QMainWindow):
         workspace_layout.addWidget(self.tree)
         outer_layout.addWidget(workspace)
 
-    # --- 核心 UI 映射驱动 ---
+    # --- UI 交互与渲染引擎 ---
+
+    def _render_node_list_to_tree(self, node_list):
+        """【公用绘制函数】将扁平化的节点缩进列表顺序组装为具有深度的树状拓扑图"""
+        self.tree.clear()
+        self.name_input.clear()
+        self.desc_input.clear()
+
+        history_stack = []
+        for node in node_list:
+            new_item = QTreeWidgetItem()
+            is_folder = node['type'] == 'folder'
+
+            prefix = "📁 " if is_folder else "📄 "
+            display_text = f"{prefix}{node['name']}"
+            if node['desc']:
+                display_text += f"  /* {node['desc']} */"
+
+            new_item.setText(0, display_text)
+            new_item.setData(0, Qt.ItemDataRole.UserRole, node['type'])
+            new_item.setData(1, Qt.ItemDataRole.UserRole, node['name'])
+            new_item.setData(2, Qt.ItemDataRole.UserRole, node['desc'])
+
+            flags = Qt.ItemFlag.ItemIsSelectable | Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsDragEnabled
+            if is_folder:
+                flags |= Qt.ItemFlag.ItemIsDropEnabled
+            new_item.setFlags(flags)
+
+            while history_stack and history_stack[-1][0] >= node['indent']:
+                history_stack.pop()
+
+            if not history_stack:
+                self.tree.addTopLevelItem(new_item)
+            else:
+                history_stack[-1][1].addChild(new_item)
+                self.tree.expandItem(history_stack[-1][1])
+
+            history_stack.append((node['indent'], new_item))
+
+    def load_from_local_directory(self):
+        """【新功能业务映射】选择并载入一个本地文件夹，将其真实架构显示在右侧界面上供直接修改"""
+        dir_path = QFileDialog.getExistingDirectory(self, "选择你想要载入扫描的项目文件夹")
+        if not dir_path:
+            return
+
+        try:
+            # 扫描本地物理目录结构
+            node_list = scan_local_directory_to_tree_data(dir_path)
+            if not node_list:
+                QMessageBox.information(self, "提示", "所选文件夹为空，或者没有符合条件的非隐藏文件。")
+                return
+
+            # 驱动渲染
+            self._render_node_list_to_tree(node_list)
+            QMessageBox.information(self, "载入成功",
+                                    f"成功抓取了本地项目物理架构！共载入 {len(node_list)} 个文件/文件夹。你可以在右侧自由拖拽、重命名或为其添加功能说明。")
+        except Exception as e:
+            QMessageBox.critical(self, "系统故障", f"无法读取或扫描该本地文件夹: {str(e)}")
+
+    def load_from_history_md(self):
+        """读取过往导出的 MD 规格历史文件并还原架构树"""
+        file_path, _ = QFileDialog.getOpenFileName(
+            self, "读取历史架构蓝图", "history", "Markdown 规范文件 (*.md)"
+        )
+        if not file_path:
+            return
+
+        try:
+            with open(file_path, "r", encoding="utf-8") as f:
+                md_content = f.read()
+
+            node_list = parse_markdown_to_tree_data(md_content)
+            if not node_list:
+                QMessageBox.warning(self, "恢复终止", "未能在此文件中找到匹配的标准 ```text 架构区块。")
+                return
+
+            self._render_node_list_to_tree(node_list)
+            QMessageBox.information(self, "架构恢复成功", f"成功从历史文件中逆向加载了 {len(node_list)} 个架构节点！")
+        except Exception as e:
+            QMessageBox.critical(self, "系统故障", f"逆向解析历史架构文件失败: {str(e)}")
+
+    # --- 基础节点控制逻辑 ---
 
     def add_node(self, is_folder):
         name = self.name_input.text().strip()
@@ -176,7 +272,7 @@ class ArchitectureBuilder(QMainWindow):
         if selected_items:
             parent = selected_items[0]
             if parent.data(0, Qt.ItemDataRole.UserRole) == "file":
-                QMessageBox.warning(self, "结构错误", "无法在文件内创建子项。请先选择文件夹，或点击空白处添加为顶层项。")
+                QMessageBox.warning(self, "结构错误", "无法在文件内创建子项。请先选择文件夹。")
                 return
             new_item = QTreeWidgetItem(parent)
             self.tree.expandItem(parent)
@@ -243,13 +339,11 @@ class ArchitectureBuilder(QMainWindow):
             QMessageBox.warning(self, "导出终止", "当前项目架构为空。")
             return
 
-        # 默认保存路径指向调配好的 history 目录
         file_path, _ = QFileDialog.getSaveFileName(
             self, "生成架构蓝图", "history/DESIGN.md", "Markdown 规范文件 (*.md)"
         )
 
         if file_path:
-            # 调用核心逻辑层方法
             md_template = generate_markdown_text(self.tree)
             try:
                 with open(file_path, "w", encoding="utf-8") as f:
@@ -257,66 +351,3 @@ class ArchitectureBuilder(QMainWindow):
                 QMessageBox.information(self, "导出成功", "工程架构规范已存入历史库！")
             except Exception as e:
                 QMessageBox.critical(self, "系统错误", f"文件导出失败: {str(e)}")
-
-    def load_from_history_md(self):
-        """【新增核心逻辑功能映射】读取过往导出的 MD 规格，通过深度线索完美逆向重建 UI 可视化树状图"""
-        file_path, _ = QFileDialog.getOpenFileName(
-            self, "读取历史架构蓝图", "history", "Markdown 规范文件 (*.md)"
-        )
-        if not file_path:
-            return
-
-        try:
-            with open(file_path, "r", encoding="utf-8") as f:
-                md_content = f.read()
-
-            # 调用核心逻辑层的反向解析引擎
-            node_list = parse_markdown_to_tree_data(md_content)
-            if not node_list:
-                QMessageBox.warning(self, "恢复终止", "未能在此文件中找到匹配的标准 ```text 架构区块。")
-                return
-
-            # 准备重绘画布
-            self.tree.clear()
-            self.name_input.clear()
-            self.desc_input.clear()
-
-            # 使用经典的缩进深度栈逻辑，顺序组装具有递归深度的节点拓扑树
-            history_stack = []
-
-            for node in node_list:
-                new_item = QTreeWidgetItem()
-                is_folder = node['type'] == 'folder'
-
-                prefix = "📁 " if is_folder else "📄 "
-                display_text = f"{prefix}{node['name']}"
-                if node['desc']:
-                    display_text += f"  /* {node['desc']} */"
-
-                new_item.setText(0, display_text)
-                new_item.setData(0, Qt.ItemDataRole.UserRole, node['type'])
-                new_item.setData(1, Qt.ItemDataRole.UserRole, node['name'])
-                new_item.setData(2, Qt.ItemDataRole.UserRole, node['desc'])
-
-                flags = Qt.ItemFlag.ItemIsSelectable | Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsDragEnabled
-                if is_folder:
-                    flags |= Qt.ItemFlag.ItemIsDropEnabled
-                new_item.setFlags(flags)
-
-                # 当当前节点缩进小于等于栈顶节点的缩进时，说明上一个层级分支已遍历完毕，回溯退栈
-                while history_stack and history_stack[-1][0] >= node['indent']:
-                    history_stack.pop()
-
-                if not history_stack:
-                    # 栈空，说明是一级根节点
-                    self.tree.addTopLevelItem(new_item)
-                else:
-                    # 否则，挂载到当前栈顶节点的麾下作为子项
-                    history_stack[-1][1].addChild(new_item)
-                    self.tree.expandItem(history_stack[-1][1])
-
-                history_stack.append((node['indent'], new_item))
-
-            QMessageBox.information(self, "架构恢复成功", f"成功从历史文件中逆向加载了 {len(node_list)} 个架构节点！")
-        except Exception as e:
-            QMessageBox.critical(self, "系统故障", f"逆向解析历史架构文件失败: {str(e)}")
